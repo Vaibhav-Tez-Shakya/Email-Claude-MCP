@@ -1,21 +1,23 @@
-import subprocess
-import sys
 import time
-from pathlib import Path
 
-base = Path(__file__).parent
+from main import sync_emails
+
+
+SYNC_INTERVAL = 60
+
 
 while True:
     print()
-    print("Starting email sync...")
+    print("========================================")
+    print("Starting automatic email sync...")
+    print("========================================")
 
-    result = subprocess.run(
-        [sys.executable, str(base / "main.py")],
-        cwd=base.parent
-    )
+    try:
+        sync_emails()
+    except Exception as e:
+        print("Sync failed:")
+        print(type(e).__name__, "-", e)
 
-    if result.returncode != 0:
-        print("Sync failed")
-
-    print("Next sync in 60 seconds...")
-    time.sleep(60)
+    print()
+    print(f"Next sync in {SYNC_INTERVAL} seconds...")
+    time.sleep(SYNC_INTERVAL)
