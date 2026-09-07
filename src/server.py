@@ -106,6 +106,24 @@ def get_email(email_id: int) -> dict:
     }
 
 
+
+@mcp.tool()
+def count_emails() -> dict:
+    """Return the exact number of emails stored in the database."""
+    conn = psycopg.connect(os.getenv("DATABASE_URL"))
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM emails")
+            count = cur.fetchone()[0]
+
+        return {
+            "total_emails": count
+        }
+
+    finally:
+        conn.close()
+
 async def sync_endpoint(request: Request):
     provided_token = request.headers.get("X-Sync-Token")
     expected_token = os.getenv("SYNC_TOKEN")
