@@ -14,7 +14,7 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
 base = Path(__file__).parent.parent
 
-load_dotenv(base / ".env")
+load_dotenv(base / ".env", override=True)
 
 
 def get_token_path():
@@ -125,6 +125,55 @@ def parse_email(raw_data):
     )
 
 
+def update_spam_status(detected_count, checked_count):
+    conn = psycopg.connect(
+        os.getenv("DATABASE_URL")
+    )
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS spam_status (
+                    id INTEGER PRIMARY KEY,
+                    detected_count INTEGER NOT NULL DEFAULT 0,
+                    checked_count INTEGER NOT NULL DEFAULT 0,
+                    last_sync_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+
+            cur.execute(
+                """
+                INSERT INTO spam_status (
+                    id,
+                    detected_count,
+                    checked_count,
+                    last_sync_at
+                )
+                VALUES (
+                    1,
+                    %s,
+                    %s,
+                    NOW()
+                )
+                ON CONFLICT (id)
+                DO UPDATE SET
+                    detected_count = EXCLUDED.detected_count,
+                    checked_count = EXCLUDED.checked_count,
+                    last_sync_at = EXCLUDED.last_sync_at
+                """,
+                (
+                    detected_count,
+                    checked_count
+                )
+            )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
 def sync_emails():
     print("Starting email sync...")
 
@@ -138,17 +187,19 @@ def sync_emails():
 
     messages = result.get("messages", [])
 
-    if not messages:
-        print("No emails found")
-        return 0
-
     conn = psycopg.connect(
         os.getenv("DATABASE_URL")
     )
 
     processed = 0
+    spam_detected = 0
 
     try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM emails WHERE category = 'SPAM'"
+            )
+
         for item in messages:
 
             message = service.users().messages().get(
@@ -157,12 +208,23 @@ def sync_emails():
                 format="raw"
             ).execute()
 
+            label_ids = message.get("labelIds", [])
+
+            category = get_email_category(label_ids)
+
+            if category == "SPAM":
+                spam_detected += 1
+
+                print(
+                    "Spam detected:",
+                    item["id"],
+                    "| not saved to database"
+                )
+
+                continue
+
             msg, body_text, body_html, has_attachments = parse_email(
                 message["raw"]
-            )
-
-            category = get_email_category(
-                message.get("labelIds", [])
             )
 
             received_at = None
@@ -237,12 +299,15 @@ def sync_emails():
     finally:
         conn.close()
 
+    update_spam_status(spam_detected, len(messages))
+
     print()
     print("Sync complete")
     print("Processed:", processed)
+    print("Spam detected:", spam_detected)
+    print("Spam saved to database: 0")
 
     return processed
-
 
 if __name__ == "__main__":
     sync_emails()

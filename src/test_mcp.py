@@ -22,23 +22,14 @@ async def main():
                 print("-", tool.name)
 
             result = await session.call_tool(
-                "search_emails",
-                {"query": "HINDCO"}
+                "get_spam_status",
+                {}
             )
 
             print()
-            print("Search result:")
-            print(result)
-
-            result = await session.call_tool(
-                "get_email",
-                {"email_id": 4}
-            )
-
-            print()
-            print("Get email result:")
+            print("Spam status:")
             print(result)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main)

@@ -209,6 +209,59 @@ def filter_emails(category: str, limit: int = 20) -> list[dict]:
 
 
 @mcp.tool()
+def get_spam_status() -> dict:
+    """Return spam detection status from the latest email sync."""
+
+    conn = psycopg.connect(os.getenv("DATABASE_URL"))
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT detected_count, checked_count, last_sync_at
+                FROM spam_status
+                WHERE id = 1
+                """
+            )
+
+            row = cur.fetchone()
+
+        if not row:
+            return {
+                "spam_detected": False,
+                "spam_count": 0,
+                "checked_count": 0,
+                "last_sync_at": None,
+                "message": "No spam detection data is available yet."
+            }
+
+        detected_count = row[0]
+        checked_count = row[1]
+        last_sync_at = row[2]
+
+        if detected_count > 0:
+            message = (
+                f"Yes, I detected {detected_count} spam email"
+                f"{'s' if detected_count != 1 else ''} during the latest sync. "
+                "They were not saved to the database."
+            )
+        else:
+            message = (
+                "No spam detected during the latest sync."
+            )
+
+        return {
+            "spam_detected": detected_count > 0,
+            "spam_count": detected_count,
+            "checked_count": checked_count,
+            "last_sync_at": last_sync_at.isoformat() if last_sync_at else None,
+            "message": message
+        }
+
+    finally:
+        conn.close()
+
+@mcp.tool()
 def count_emails() -> dict:
     """Return the exact number of emails stored in the database."""
 
