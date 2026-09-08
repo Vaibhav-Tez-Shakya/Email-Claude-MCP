@@ -24,7 +24,8 @@ with local_conn.cursor() as local_cur:
             body_html,
             received_at,
             has_attachments,
-            created_at
+            created_at,
+            category
         FROM emails
         ORDER BY id
     """)
@@ -45,10 +46,13 @@ with render_conn.cursor() as render_cur:
                 body_html,
                 received_at,
                 has_attachments,
-                created_at
+                created_at,
+                category
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (message_id) DO NOTHING
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (message_id)
+            DO UPDATE SET
+                category = COALESCE(EXCLUDED.category, emails.category)
             """,
             email
         )

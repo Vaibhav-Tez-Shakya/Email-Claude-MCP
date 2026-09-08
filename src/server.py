@@ -25,92 +25,97 @@ def search_emails(query: str) -> list[dict]:
 
     conn = psycopg.connect(os.getenv("DATABASE_URL"))
 
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, sender, receiver, subject, received_at
-            FROM emails
-            WHERE
-                sender ILIKE %s
-                OR receiver ILIKE %s
-                OR subject ILIKE %s
-                OR body_text ILIKE %s
-            ORDER BY received_at DESC
-            LIMIT 10
-            """,
-            tuple([f"%{query}%"] * 4)
-        )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, sender, receiver, subject, category, received_at
+                FROM emails
+                WHERE
+                    sender ILIKE %s
+                    OR receiver ILIKE %s
+                    OR subject ILIKE %s
+                    OR body_text ILIKE %s
+                ORDER BY received_at DESC
+                LIMIT 10
+                """,
+                tuple([f"%{query}%"] * 4)
+            )
 
-        rows = cur.fetchall()
+            rows = cur.fetchall()
 
-    conn.close()
+        return [
+            {
+                "id": row[0],
+                "sender": row[1],
+                "receiver": row[2],
+                "subject": row[3],
+                "category": row[4],
+                "received_at": row[5].isoformat() if row[5] else None
+            }
+            for row in rows
+        ]
 
-    return [
-        {
-            "id": row[0],
-            "sender": row[1],
-            "receiver": row[2],
-            "subject": row[3],
-            "received_at": row[4].isoformat() if row[4] else None
-        }
-        for row in rows
-    ]
+    finally:
+        conn.close()
 
 
 @mcp.tool()
 def get_email(email_id: int) -> dict:
-    """Get the complete stored email by database ID."""
+    """Get the complete stored email by database ID, including its Gmail category."""
 
     conn = psycopg.connect(os.getenv("DATABASE_URL"))
 
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT
-                id,
-                message_id,
-                thread_id,
-                sender,
-                receiver,
-                subject,
-                body_text,
-                body_html,
-                received_at,
-                has_attachments,
-                created_at
-            FROM emails
-            WHERE id = %s
-            """,
-            (email_id,)
-        )
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    message_id,
+                    thread_id,
+                    sender,
+                    receiver,
+                    subject,
+                    body_text,
+                    body_html,
+                    received_at,
+                    has_attachments,
+                    created_at,
+                    category
+                FROM emails
+                WHERE id = %s
+                """,
+                (email_id,)
+            )
 
-        row = cur.fetchone()
+            row = cur.fetchone()
 
-    conn.close()
+        if not row:
+            return {"error": "Email not found"}
 
-    if not row:
-        return {"error": "Email not found"}
+        return {
+            "id": row[0],
+            "message_id": row[1],
+            "thread_id": row[2],
+            "sender": row[3],
+            "receiver": row[4],
+            "subject": row[5],
+            "body_text": row[6],
+            "body_html": row[7],
+            "received_at": row[8].isoformat() if row[8] else None,
+            "has_attachments": row[9],
+            "created_at": row[10].isoformat() if row[10] else None,
+            "category": row[11]
+        }
 
-    return {
-        "id": row[0],
-        "message_id": row[1],
-        "thread_id": row[2],
-        "sender": row[3],
-        "receiver": row[4],
-        "subject": row[5],
-        "body_text": row[6],
-        "body_html": row[7],
-        "received_at": row[8].isoformat() if row[8] else None,
-        "has_attachments": row[9],
-        "created_at": row[10].isoformat() if row[10] else None
-    }
-
-
+    finally:
+        conn.close()
 
 
 @mcp.tool()
 def list_emails(limit: int = 20) -> list[dict]:
-    """List the most recent emails stored in the database."""
+    """List the most recent emails stored in the database, including Gmail category."""
 
     limit = max(1, min(limit, 100))
 
@@ -120,7 +125,7 @@ def list_emails(limit: int = 20) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, sender, receiver, subject, received_at
+                SELECT id, sender, receiver, subject, category, received_at
                 FROM emails
                 ORDER BY received_at DESC NULLS LAST, id DESC
                 LIMIT %s
@@ -136,7 +141,8 @@ def list_emails(limit: int = 20) -> list[dict]:
                 "sender": row[1],
                 "receiver": row[2],
                 "subject": row[3],
-                "received_at": row[4].isoformat() if row[4] else None
+                "category": row[4],
+                "received_at": row[5].isoformat() if row[5] else None
             }
             for row in rows
         ]
@@ -144,9 +150,68 @@ def list_emails(limit: int = 20) -> list[dict]:
     finally:
         conn.close()
 
+
+@mcp.tool()
+def filter_emails(category: str, limit: int = 20) -> list[dict]:
+    """Filter emails by Gmail category. Valid categories are PRIMARY, PROMOTIONS, SOCIAL, UPDATES, and SPAM."""
+
+    category = category.strip().upper()
+
+    valid_categories = {
+        "PRIMARY",
+        "PROMOTIONS",
+        "SOCIAL",
+        "UPDATES",
+        "SPAM"
+    }
+
+    if category not in valid_categories:
+        return [
+            {
+                "error": "Invalid category",
+                "valid_categories": sorted(valid_categories)
+            }
+        ]
+
+    limit = max(1, min(limit, 100))
+
+    conn = psycopg.connect(os.getenv("DATABASE_URL"))
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, sender, receiver, subject, category, received_at
+                FROM emails
+                WHERE category = %s
+                ORDER BY received_at DESC NULLS LAST, id DESC
+                LIMIT %s
+                """,
+                (category, limit)
+            )
+
+            rows = cur.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "sender": row[1],
+                "receiver": row[2],
+                "subject": row[3],
+                "category": row[4],
+                "received_at": row[5].isoformat() if row[5] else None
+            }
+            for row in rows
+        ]
+
+    finally:
+        conn.close()
+
+
 @mcp.tool()
 def count_emails() -> dict:
     """Return the exact number of emails stored in the database."""
+
     conn = psycopg.connect(os.getenv("DATABASE_URL"))
 
     try:
@@ -160,6 +225,7 @@ def count_emails() -> dict:
 
     finally:
         conn.close()
+
 
 async def sync_endpoint(request: Request):
     provided_token = request.headers.get("X-Sync-Token")

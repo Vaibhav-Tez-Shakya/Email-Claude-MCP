@@ -43,6 +43,22 @@ def get_gmail_service():
     )
 
 
+def get_email_category(label_ids):
+    if "SPAM" in label_ids:
+        return "SPAM"
+
+    if "CATEGORY_PROMOTIONS" in label_ids:
+        return "PROMOTIONS"
+
+    if "CATEGORY_SOCIAL" in label_ids:
+        return "SOCIAL"
+
+    if "CATEGORY_UPDATES" in label_ids:
+        return "UPDATES"
+
+    return "PRIMARY"
+
+
 def parse_email(raw_data):
     raw_bytes = base64.urlsafe_b64decode(raw_data)
 
@@ -116,7 +132,8 @@ def sync_emails():
 
     result = service.users().messages().list(
         userId="me",
-        maxResults=10
+        maxResults=10,
+        includeSpamTrash=True
     ).execute()
 
     messages = result.get("messages", [])
@@ -144,6 +161,10 @@ def sync_emails():
                 message["raw"]
             )
 
+            category = get_email_category(
+                message.get("labelIds", [])
+            )
+
             received_at = None
 
             if msg.get("Date"):
@@ -166,11 +187,12 @@ def sync_emails():
                         body_text,
                         body_html,
                         received_at,
-                        has_attachments
+                        has_attachments,
+                        category
                     )
                     VALUES (
                         %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s
+                        %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (message_id)
                     DO UPDATE SET
@@ -181,7 +203,8 @@ def sync_emails():
                         body_text = EXCLUDED.body_text,
                         body_html = EXCLUDED.body_html,
                         received_at = EXCLUDED.received_at,
-                        has_attachments = EXCLUDED.has_attachments
+                        has_attachments = EXCLUDED.has_attachments,
+                        category = EXCLUDED.category
                     """,
                     (
                         item["id"],
@@ -192,7 +215,8 @@ def sync_emails():
                         body_text,
                         body_html,
                         received_at,
-                        has_attachments
+                        has_attachments,
+                        category
                     )
                 )
 
@@ -201,6 +225,8 @@ def sync_emails():
             print(
                 "Synced:",
                 msg.get("Subject"),
+                "| category:",
+                category,
                 "| body:",
                 len(body_text),
                 "chars"
