@@ -107,6 +107,43 @@ def get_email(email_id: int) -> dict:
 
 
 
+
+@mcp.tool()
+def list_emails(limit: int = 20) -> list[dict]:
+    """List the most recent emails stored in the database."""
+
+    limit = max(1, min(limit, 100))
+
+    conn = psycopg.connect(os.getenv("DATABASE_URL"))
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, sender, receiver, subject, received_at
+                FROM emails
+                ORDER BY received_at DESC NULLS LAST, id DESC
+                LIMIT %s
+                """,
+                (limit,)
+            )
+
+            rows = cur.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "sender": row[1],
+                "receiver": row[2],
+                "subject": row[3],
+                "received_at": row[4].isoformat() if row[4] else None
+            }
+            for row in rows
+        ]
+
+    finally:
+        conn.close()
+
 @mcp.tool()
 def count_emails() -> dict:
     """Return the exact number of emails stored in the database."""
