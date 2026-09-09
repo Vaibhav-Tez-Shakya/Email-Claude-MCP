@@ -4,3 +4,7 @@ credentials.json
 token.json
 __pycache__/
 *.pyc
+
+token_account_2.json
+
+authorize_account2.py
