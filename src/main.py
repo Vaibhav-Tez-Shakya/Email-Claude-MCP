@@ -1,4 +1,4 @@
-from google.oauth2.credentials import Credentials
+﻿from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from pathlib import Path
@@ -10,9 +10,14 @@ import psycopg
 import os
 import base64
 import time
+from datetime import datetime, timezone
 
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+
+MAX_EMAILS = 1000
+
+SYNC_LOCK_ID = 84736291
 
 base = Path(__file__).parent.parent
 
@@ -176,12 +181,14 @@ def update_spam_status(detected_count, checked_count):
     finally:
         conn.close()
 
+
 def gmail_execute(request, attempts=7):
     delay = 2
 
     for attempt in range(attempts):
         try:
             return request.execute()
+
         except HttpError as error:
             error_text = str(error)
 
@@ -201,34 +208,145 @@ def gmail_execute(request, attempts=7):
 
                 time.sleep(delay)
                 delay = min(delay * 2, 60)
+
             else:
                 raise
 
 
-def sync_emails():
-    print("Starting full email sync...")
+def ensure_sync_state_table(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS email_sync_state (
+            id INTEGER PRIMARY KEY,
+            last_sync_at TIMESTAMPTZ
+        )
+        """
+    )
 
-    service = get_gmail_service()
+
+def get_last_sync(cur):
+    cur.execute(
+        """
+        SELECT last_sync_at
+        FROM email_sync_state
+        WHERE id = 1
+        """
+    )
+
+    row = cur.fetchone()
+
+    if not row:
+        return None
+
+    return row[0]
+
+
+def save_sync_time(cur, sync_time):
+    cur.execute(
+        """
+        INSERT INTO email_sync_state (
+            id,
+            last_sync_at
+        )
+        VALUES (
+            1,
+            %s
+        )
+        ON CONFLICT (id)
+        DO UPDATE SET
+            last_sync_at = EXCLUDED.last_sync_at
+        """,
+        (sync_time,)
+    )
+
+
+def prune_emails(cur):
+    cur.execute(
+        """
+        DELETE FROM emails
+        WHERE id NOT IN (
+            SELECT id
+            FROM emails
+            ORDER BY received_at DESC NULLS LAST, id DESC
+            LIMIT %s
+        )
+        """,
+        (MAX_EMAILS,)
+    )
+
+    return cur.rowcount
+
+
+def sync_emails():
+    print()
+    print("=" * 60)
+    print("Starting email sync...")
+    print("=" * 60)
 
     conn = psycopg.connect(
         os.getenv("DATABASE_URL")
     )
 
-    processed = 0
-    spam_detected = 0
-    checked_count = 0
-    listed_count = 0
-    page_token = None
-    page_number = 0
-
-    category_counts = {
-        "PRIMARY": 0,
-        "PROMOTIONS": 0,
-        "SOCIAL": 0,
-        "UPDATES": 0
-    }
+    lock_acquired = False
 
     try:
+        with conn.cursor() as cur:
+
+            ensure_sync_state_table(cur)
+            conn.commit()
+
+            cur.execute(
+                "SELECT pg_try_advisory_lock(%s)",
+                (SYNC_LOCK_ID,)
+            )
+
+            lock_acquired = cur.fetchone()[0]
+
+            if not lock_acquired:
+                print("A sync is already running. Skipping this run.")
+                return 0
+
+            sync_started_at = datetime.now(timezone.utc)
+
+            last_sync = get_last_sync(cur)
+
+            if last_sync is None:
+                sync_mode = "INITIAL"
+
+                print("Sync mode: INITIAL")
+                print("Maximum Gmail messages:", MAX_EMAILS)
+
+                gmail_query = None
+
+            else:
+                sync_mode = "INCREMENTAL"
+
+                after_timestamp = int(last_sync.timestamp())
+
+                gmail_query = f"after:{after_timestamp}"
+
+                print("Sync mode: INCREMENTAL")
+                print("Last sync:", last_sync)
+                print("Gmail query:", gmail_query)
+
+            conn.commit()
+
+        service = get_gmail_service()
+
+        processed = 0
+        spam_detected = 0
+        checked_count = 0
+        listed_count = 0
+        page_token = None
+        page_number = 0
+
+        category_counts = {
+            "PRIMARY": 0,
+            "PROMOTIONS": 0,
+            "SOCIAL": 0,
+            "UPDATES": 0
+        }
+
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM emails WHERE category = 'SPAM'"
@@ -237,18 +355,42 @@ def sync_emails():
         conn.commit()
 
         while True:
+
+            if sync_mode == "INITIAL" and listed_count >= MAX_EMAILS:
+                print(
+                    "Initial sync limit reached:",
+                    MAX_EMAILS
+                )
+                break
+
             page_number += 1
+
+            request_kwargs = {
+                "userId": "me",
+                "maxResults": 100,
+                "includeSpamTrash": True
+            }
+
+            if page_token:
+                request_kwargs["pageToken"] = page_token
+
+            if gmail_query:
+                request_kwargs["q"] = gmail_query
 
             result = gmail_execute(
                 service.users().messages().list(
-                    userId="me",
-                    maxResults=100,
-                    includeSpamTrash=True,
-                    pageToken=page_token
+                    **request_kwargs
                 )
             )
 
             messages = result.get("messages", [])
+
+            if sync_mode == "INITIAL":
+                remaining = MAX_EMAILS - listed_count
+
+                if len(messages) > remaining:
+                    messages = messages[:remaining]
+
             listed_count += len(messages)
 
             print(
@@ -260,7 +402,14 @@ def sync_emails():
                 listed_count
             )
 
+            if not messages:
+                break
+
             for item in messages:
+
+                if sync_mode == "INITIAL" and checked_count >= MAX_EMAILS:
+                    break
+
                 message = gmail_execute(
                     service.users().messages().get(
                         userId="me",
@@ -272,6 +421,7 @@ def sync_emails():
                 checked_count += 1
 
                 label_ids = message.get("labelIds", [])
+
                 category = get_email_category(label_ids)
 
                 if category == "SPAM":
@@ -371,6 +521,9 @@ def sync_emails():
 
             conn.commit()
 
+            if sync_mode == "INITIAL" and checked_count >= MAX_EMAILS:
+                break
+
             page_token = result.get("nextPageToken")
 
             if not page_token:
@@ -378,25 +531,64 @@ def sync_emails():
 
             time.sleep(1)
 
+        with conn.cursor() as cur:
+
+            deleted_count = prune_emails(cur)
+
+            print(
+                "Pruned old emails:",
+                deleted_count
+            )
+
+            save_sync_time(cur, sync_started_at)
+
+        conn.commit()
+
+        update_spam_status(
+            spam_detected,
+            checked_count
+        )
+
+        print()
+        print("=" * 60)
+        print("Email sync complete")
+        print("=" * 60)
+        print("Mode:", sync_mode)
+        print("Pages processed:", page_number)
+        print("Total listed:", listed_count)
+        print("Total checked:", checked_count)
+        print("Total saved/updated:", processed)
+        print("Spam detected:", spam_detected)
+        print("Spam saved: 0")
+        print("Database maximum:", MAX_EMAILS)
+        print()
+        print("Category distribution:")
+
+        for category, count in category_counts.items():
+            print(category + ":", count)
+
+        return processed
+
     finally:
+
+        if lock_acquired:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(%s)",
+                        (SYNC_LOCK_ID,)
+                    )
+
+                conn.commit()
+
+            except Exception as error:
+                print(
+                    "Could not release sync lock:",
+                    error
+                )
+
         conn.close()
 
-    update_spam_status(spam_detected, checked_count)
 
-    print()
-    print("Full sync complete")
-    print("Pages processed:", page_number)
-    print("Total listed:", listed_count)
-    print("Total checked:", checked_count)
-    print("Total saved:", processed)
-    print("Spam detected:", spam_detected)
-    print("Spam saved: 0")
-    print()
-    print("Category distribution:")
-
-    for category, count in category_counts.items():
-        print(category + ":", count)
-
-    return processed
 if __name__ == "__main__":
     sync_emails()
