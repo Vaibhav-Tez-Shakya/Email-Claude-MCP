@@ -287,6 +287,7 @@ def save_sync_time(cur, mailbox, sync_time):
             %s
         )
         ON CONFLICT (mailbox)
+        WHERE mailbox IS NOT NULL
         DO UPDATE SET
             last_sync_at = EXCLUDED.last_sync_at
         """,
