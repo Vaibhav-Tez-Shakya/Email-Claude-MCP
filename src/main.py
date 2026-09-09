@@ -273,26 +273,44 @@ def get_last_sync(cur, mailbox):
 def save_sync_time(cur, mailbox, sync_time):
     cur.execute(
         """
-        INSERT INTO email_sync_state (
-            id,
-            mailbox,
-            last_sync_at
-        )
-        VALUES (
-            COALESCE(
-                (SELECT MAX(id) + 1 FROM email_sync_state),
-                1
-            ),
-            %s,
-            %s
-        )
-        ON CONFLICT (mailbox)
-        WHERE mailbox IS NOT NULL
-        DO UPDATE SET
-            last_sync_at = EXCLUDED.last_sync_at
+        SELECT id
+        FROM email_sync_state
+        WHERE mailbox = %s
+        LIMIT 1
         """,
-        (mailbox, sync_time)
+        (mailbox,)
     )
+
+    row = cur.fetchone()
+
+    if row:
+        cur.execute(
+            """
+            UPDATE email_sync_state
+            SET last_sync_at = %s
+            WHERE id = %s
+            """,
+            (sync_time, row[0])
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO email_sync_state (
+                id,
+                mailbox,
+                last_sync_at
+            )
+            VALUES (
+                COALESCE(
+                    (SELECT MAX(id) + 1 FROM email_sync_state),
+                    1
+                ),
+                %s,
+                %s
+            )
+            """,
+            (mailbox, sync_time)
+        )
 
 
 def prune_emails(cur):
