@@ -1,5 +1,6 @@
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from pathlib import Path
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -8,6 +9,7 @@ from email.utils import parsedate_to_datetime
 import psycopg
 import os
 import base64
+import time
 
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
@@ -174,18 +176,39 @@ def update_spam_status(detected_count, checked_count):
     finally:
         conn.close()
 
+def gmail_execute(request, attempts=7):
+    delay = 2
+
+    for attempt in range(attempts):
+        try:
+            return request.execute()
+        except HttpError as error:
+            error_text = str(error)
+
+            if error.resp.status in (403, 429) and (
+                "rateLimitExceeded" in error_text
+                or "userRateLimitExceeded" in error_text
+                or "quotaExceeded" in error_text
+            ):
+                if attempt == attempts - 1:
+                    raise
+
+                print(
+                    "Gmail rate limit reached. Waiting",
+                    delay,
+                    "seconds..."
+                )
+
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+            else:
+                raise
+
+
 def sync_emails():
-    print("Starting email sync...")
+    print("Starting full email sync...")
 
     service = get_gmail_service()
-
-    result = service.users().messages().list(
-        userId="me",
-        maxResults=10,
-        includeSpamTrash=True
-    ).execute()
-
-    messages = result.get("messages", [])
 
     conn = psycopg.connect(
         os.getenv("DATABASE_URL")
@@ -193,6 +216,17 @@ def sync_emails():
 
     processed = 0
     spam_detected = 0
+    checked_count = 0
+    listed_count = 0
+    page_token = None
+    page_number = 0
+
+    category_counts = {
+        "PRIMARY": 0,
+        "PROMOTIONS": 0,
+        "SOCIAL": 0,
+        "UPDATES": 0
+    }
 
     try:
         with conn.cursor() as cur:
@@ -200,114 +234,169 @@ def sync_emails():
                 "DELETE FROM emails WHERE category = 'SPAM'"
             )
 
-        for item in messages:
+        conn.commit()
 
-            message = service.users().messages().get(
-                userId="me",
-                id=item["id"],
-                format="raw"
-            ).execute()
+        while True:
+            page_number += 1
 
-            label_ids = message.get("labelIds", [])
-
-            category = get_email_category(label_ids)
-
-            if category == "SPAM":
-                spam_detected += 1
-
-                print(
-                    "Spam detected:",
-                    item["id"],
-                    "| not saved to database"
+            result = gmail_execute(
+                service.users().messages().list(
+                    userId="me",
+                    maxResults=100,
+                    includeSpamTrash=True,
+                    pageToken=page_token
                 )
-
-                continue
-
-            msg, body_text, body_html, has_attachments = parse_email(
-                message["raw"]
             )
 
-            received_at = None
-
-            if msg.get("Date"):
-                try:
-                    received_at = parsedate_to_datetime(
-                        msg.get("Date")
-                    )
-                except (TypeError, ValueError):
-                    pass
-
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO emails (
-                        message_id,
-                        thread_id,
-                        sender,
-                        receiver,
-                        subject,
-                        body_text,
-                        body_html,
-                        received_at,
-                        has_attachments,
-                        category
-                    )
-                    VALUES (
-                        %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s
-                    )
-                    ON CONFLICT (message_id)
-                    DO UPDATE SET
-                        thread_id = EXCLUDED.thread_id,
-                        sender = EXCLUDED.sender,
-                        receiver = EXCLUDED.receiver,
-                        subject = EXCLUDED.subject,
-                        body_text = EXCLUDED.body_text,
-                        body_html = EXCLUDED.body_html,
-                        received_at = EXCLUDED.received_at,
-                        has_attachments = EXCLUDED.has_attachments,
-                        category = EXCLUDED.category
-                    """,
-                    (
-                        item["id"],
-                        message.get("X-GM-THRID"),
-                        msg.get("From"),
-                        msg.get("To"),
-                        msg.get("Subject"),
-                        body_text,
-                        body_html,
-                        received_at,
-                        has_attachments,
-                        category
-                    )
-                )
-
-            processed += 1
+            messages = result.get("messages", [])
+            listed_count += len(messages)
 
             print(
-                "Synced:",
-                msg.get("Subject"),
-                "| category:",
-                category,
-                "| body:",
-                len(body_text),
-                "chars"
+                "Page:",
+                page_number,
+                "| listed:",
+                len(messages),
+                "| total listed:",
+                listed_count
             )
 
-        conn.commit()
+            for item in messages:
+                message = gmail_execute(
+                    service.users().messages().get(
+                        userId="me",
+                        id=item["id"],
+                        format="raw"
+                    )
+                )
+
+                checked_count += 1
+
+                label_ids = message.get("labelIds", [])
+                category = get_email_category(label_ids)
+
+                if category == "SPAM":
+                    spam_detected += 1
+
+                    if spam_detected % 10 == 0 or spam_detected == 1:
+                        print(
+                            "Spam detected:",
+                            spam_detected,
+                            "| latest message:",
+                            item["id"]
+                        )
+
+                    continue
+
+                msg, body_text, body_html, has_attachments = parse_email(
+                    message["raw"]
+                )
+
+                received_at = None
+
+                if msg.get("Date"):
+                    try:
+                        received_at = parsedate_to_datetime(
+                            msg.get("Date")
+                        )
+                    except (TypeError, ValueError):
+                        pass
+
+                thread_id = message.get("threadId")
+
+                sender = str(msg.get("From") or "")
+                receiver = str(msg.get("To") or "")
+                subject = str(msg.get("Subject") or "")
+
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO emails (
+                            message_id,
+                            thread_id,
+                            sender,
+                            receiver,
+                            subject,
+                            body_text,
+                            body_html,
+                            received_at,
+                            has_attachments,
+                            category
+                        )
+                        VALUES (
+                            %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s
+                        )
+                        ON CONFLICT (message_id)
+                        DO UPDATE SET
+                            thread_id = EXCLUDED.thread_id,
+                            sender = EXCLUDED.sender,
+                            receiver = EXCLUDED.receiver,
+                            subject = EXCLUDED.subject,
+                            body_text = EXCLUDED.body_text,
+                            body_html = EXCLUDED.body_html,
+                            received_at = EXCLUDED.received_at,
+                            has_attachments = EXCLUDED.has_attachments,
+                            category = EXCLUDED.category
+                        """,
+                        (
+                            item["id"],
+                            thread_id,
+                            sender,
+                            receiver,
+                            subject,
+                            body_text,
+                            body_html,
+                            received_at,
+                            has_attachments,
+                            category
+                        )
+                    )
+
+                processed += 1
+                category_counts[category] += 1
+
+                if processed % 25 == 0:
+                    conn.commit()
+
+                    print(
+                        "Progress:",
+                        processed,
+                        "saved |",
+                        checked_count,
+                        "checked | spam:",
+                        spam_detected
+                    )
+
+                time.sleep(0.2)
+
+            conn.commit()
+
+            page_token = result.get("nextPageToken")
+
+            if not page_token:
+                break
+
+            time.sleep(1)
 
     finally:
         conn.close()
 
-    update_spam_status(spam_detected, len(messages))
+    update_spam_status(spam_detected, checked_count)
 
     print()
-    print("Sync complete")
-    print("Processed:", processed)
+    print("Full sync complete")
+    print("Pages processed:", page_number)
+    print("Total listed:", listed_count)
+    print("Total checked:", checked_count)
+    print("Total saved:", processed)
     print("Spam detected:", spam_detected)
-    print("Spam saved to database: 0")
+    print("Spam saved: 0")
+    print()
+    print("Category distribution:")
+
+    for category, count in category_counts.items():
+        print(category + ":", count)
 
     return processed
-
 if __name__ == "__main__":
     sync_emails()
