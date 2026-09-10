@@ -1,4 +1,5 @@
 import contextlib
+import io
 import os
 
 import psycopg
@@ -297,7 +298,8 @@ async def sync_endpoint(request: Request):
         )
 
     try:
-        processed = sync_emails()
+        with contextlib.redirect_stdout(io.StringIO()):
+            processed = sync_emails()
 
         return JSONResponse(
             {
