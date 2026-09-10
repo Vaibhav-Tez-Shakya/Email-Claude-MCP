@@ -30,7 +30,7 @@ def search_emails(query: str) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, sender, receiver, subject, category, received_at
+                SELECT id, sender, receiver, subject, category, mailbox, received_at
                 FROM emails
                 WHERE
                     sender ILIKE %s
@@ -52,7 +52,8 @@ def search_emails(query: str) -> list[dict]:
                 "receiver": row[2],
                 "subject": row[3],
                 "category": row[4],
-                "received_at": row[5].isoformat() if row[5] else None
+                "mailbox": row[5],
+                "received_at": row[6].isoformat() if row[6] else None
             }
             for row in rows
         ]
@@ -83,7 +84,8 @@ def get_email(email_id: int) -> dict:
                     received_at,
                     has_attachments,
                     created_at,
-                    category
+                    category,
+                    mailbox
                 FROM emails
                 WHERE id = %s
                 """,
@@ -107,7 +109,8 @@ def get_email(email_id: int) -> dict:
             "received_at": row[8].isoformat() if row[8] else None,
             "has_attachments": row[9],
             "created_at": row[10].isoformat() if row[10] else None,
-            "category": row[11]
+            "category": row[11],
+            "mailbox": row[12]
         }
 
     finally:
@@ -126,7 +129,7 @@ def list_emails(limit: int = 20) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, sender, receiver, subject, category, received_at
+                SELECT id, sender, receiver, subject, category, mailbox, received_at
                 FROM emails
                 ORDER BY received_at DESC NULLS LAST, id DESC
                 LIMIT %s
@@ -143,7 +146,8 @@ def list_emails(limit: int = 20) -> list[dict]:
                 "receiver": row[2],
                 "subject": row[3],
                 "category": row[4],
-                "received_at": row[5].isoformat() if row[5] else None
+                "mailbox": row[5],
+                "received_at": row[6].isoformat() if row[6] else None
             }
             for row in rows
         ]
@@ -182,7 +186,7 @@ def filter_emails(category: str, limit: int = 20) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, sender, receiver, subject, category, received_at
+                SELECT id, sender, receiver, subject, category, mailbox, received_at
                 FROM emails
                 WHERE category = %s
                 ORDER BY received_at DESC NULLS LAST, id DESC
@@ -200,7 +204,8 @@ def filter_emails(category: str, limit: int = 20) -> list[dict]:
                 "receiver": row[2],
                 "subject": row[3],
                 "category": row[4],
-                "received_at": row[5].isoformat() if row[5] else None
+                "mailbox": row[5],
+                "received_at": row[6].isoformat() if row[6] else None
             }
             for row in rows
         ]

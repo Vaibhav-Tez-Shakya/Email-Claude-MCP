@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-MAX_EMAILS = 1000
+MAX_EMAILS = 500
 
 SYNC_LOCK_ID = 84736291
 
@@ -565,29 +565,57 @@ def sync_emails():
                     with conn.cursor() as cur:
                         cur.execute(
                             """
-                            SELECT 1
+                            SELECT id, mailbox
                             FROM emails
                             WHERE email_hash = %s
-                              AND mailbox <> %s
-                            LIMIT 1
+                            LIMIT 20
                             """,
-                            (
-                                email_hash,
-                                mailbox
+                            (email_hash,)
+                        )
+
+                        duplicate_row = None
+
+                        for candidate_id, candidate_mailbox in cur.fetchall():
+                            candidate_accounts = [
+                                x.strip()
+                                for x in str(candidate_mailbox or "").split(",")
+                                if x.strip()
+                            ]
+
+                            if candidate_accounts and mailbox not in candidate_accounts:
+                                duplicate_row = (
+                                    candidate_id,
+                                    candidate_accounts
+                                )
+                                break
+
+                        if duplicate_row:
+                            existing_id, existing_accounts = duplicate_row
+
+                            existing_accounts.append(mailbox)
+
+                            cur.execute(
+                                """
+                                UPDATE emails
+                                SET mailbox = %s
+                                WHERE id = %s
+                                """,
+                                (
+                                    ",".join(existing_accounts),
+                                    existing_id
+                                )
                             )
-                        )
 
-                        duplicate_from_other_account = (
-                            cur.fetchone() is not None
-                        )
-
-                        if duplicate_from_other_account:
                             skipped_duplicates += 1
                             total_skipped_duplicates += 1
 
                             print(
-                                "Cross-account duplicate skipped:",
-                                item["id"]
+                                "Cross-account duplicate detected:",
+                                item["id"],
+                                "| existing email id:",
+                                existing_id,
+                                "| mailboxes:",
+                                ",".join(existing_accounts)
                             )
 
                             continue
@@ -692,6 +720,14 @@ def sync_emails():
                 )
 
             conn.commit()
+
+            with conn.cursor() as cur:
+                pruned = prune_emails(cur)
+
+            conn.commit()
+
+            if pruned:
+                print("Pruned old emails:", pruned)
 
             total_spam += spam_detected
 
