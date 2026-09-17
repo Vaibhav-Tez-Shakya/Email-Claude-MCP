@@ -372,7 +372,7 @@ def prune_emails(cur):
 
     for email_id in deleted_ids:
         attachment_dir = (
-            BASE_DIR / "attachments" / str(email_id)
+            base / "attachments" / str(email_id)
         )
 
         if attachment_dir.exists():
@@ -1263,3 +1263,4 @@ def sync_emails():
                 pass
 
         conn.close()
+
