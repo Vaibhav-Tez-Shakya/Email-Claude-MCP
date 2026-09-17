@@ -210,6 +210,8 @@ def get_email(email_id: int) -> dict:
                     thread_id,
                     sender,
                     receiver,
+                    cc,
+                    bcc,
                     subject,
                     body_text,
                     body_html,
@@ -244,15 +246,17 @@ def get_email(email_id: int) -> dict:
             "thread_id": row[2],
             "sender": row[3],
             "receiver": row[4],
-            "subject": row[5],
-            "body_text": row[6],
-            "body_html": row[7],
-            "received_at": row[8].isoformat() if row[8] else None,
-            "has_attachments": row[9],
+            "cc": row[5],
+            "bcc": row[6],
+            "subject": row[7],
+            "body_text": row[8],
+            "body_html": row[9],
+            "received_at": row[10].isoformat() if row[10] else None,
+            "has_attachments": row[11],
             "attachment_count": attachment_count,
-            "created_at": row[10].isoformat() if row[10] else None,
-            "category": row[11],
-            "mailbox": row[12]
+            "created_at": row[12].isoformat() if row[12] else None,
+            "category": row[13],
+            "mailbox": row[14]
         }
 
     finally:
