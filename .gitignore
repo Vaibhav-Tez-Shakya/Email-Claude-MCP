@@ -8,3 +8,8 @@ __pycache__/
 token_account_2.json
 
 authorize_account2.py
+
+# Email attachments
+attachments/
+
+data/

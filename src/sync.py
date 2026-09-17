@@ -1,9 +1,9 @@
 import time
 
-from main import sync_emails
+from src.main import sync_emails
 
 
-SYNC_INTERVAL = 60
+SYNC_INTERVAL = 20
 
 
 while True:

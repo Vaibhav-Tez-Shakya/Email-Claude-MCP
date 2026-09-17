@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 from email import message_from_bytes
-from email.utils import parsedate_to_datetime
+from email.utils import parsedate_to_datetime, getaddresses
 import psycopg
 import os
 import base64
@@ -14,10 +14,19 @@ import re
 import time
 from datetime import datetime, timezone
 
+from src.attachment_extractors import extract_attachment_text
+from src.attachment_storage import (
+    get_attachment_directory,
+    decode_attachment_data,
+    safe_filename,
+    extract_attachment_parts,
+    attachment_hash
+)
+
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-MAX_EMAILS = 500
+MAX_EMAILS = 100
 
 SYNC_LOCK_ID = 84736291
 
@@ -316,7 +325,8 @@ def save_sync_time(cur, mailbox, sync_time):
 def prune_emails(cur):
     cur.execute(
         """
-        DELETE FROM emails
+        SELECT id
+        FROM emails
         WHERE id NOT IN (
             SELECT id
             FROM emails
@@ -327,8 +337,72 @@ def prune_emails(cur):
         (MAX_EMAILS,)
     )
 
-    return cur.rowcount
+    deleted_ids = [
+        row[0]
+        for row in cur.fetchall()
+    ]
 
+    if not deleted_ids:
+        return 0
+
+    cur.execute(
+        """
+        SELECT DISTINCT storage_path
+        FROM email_attachments
+        WHERE email_id = ANY(%s)
+          AND storage_path LIKE 'attachments\\_shared\\%%'
+        """,
+        (deleted_ids,)
+    )
+
+    candidate_paths = [
+        row[0]
+        for row in cur.fetchall()
+    ]
+
+    cur.execute(
+        """
+        DELETE FROM emails
+        WHERE id = ANY(%s)
+        """,
+        (deleted_ids,)
+    )
+
+    import shutil
+
+    for email_id in deleted_ids:
+        attachment_dir = (
+            BASE_DIR / "attachments" / str(email_id)
+        )
+
+        if attachment_dir.exists():
+            shutil.rmtree(
+                attachment_dir,
+                ignore_errors=True
+            )
+
+    for storage_path in candidate_paths:
+        cur.execute(
+            """
+            SELECT 1
+            FROM email_attachments
+            WHERE storage_path = %s
+            LIMIT 1
+            """,
+            (storage_path,)
+        )
+
+        still_referenced = cur.fetchone()
+
+        if still_referenced:
+            continue
+
+        file_path = base / Path(storage_path)
+
+        if file_path.exists():
+            file_path.unlink()
+
+    return len(deleted_ids)
 
 def normalize_for_hash(value):
     value = str(value or "")
@@ -347,6 +421,285 @@ def calculate_email_hash(sender, subject, body_text):
     return hashlib.sha256(
         canonical.encode("utf-8")
     ).hexdigest()
+
+
+def save_gmail_attachments(service, gmail_message_id, email_id, conn):
+    full_message = gmail_execute(
+        service.users().messages().get(
+            userId="me",
+            id=gmail_message_id,
+            format="full"
+        )
+    )
+
+    parts = extract_attachment_parts(
+        full_message.get("payload") or {}
+    )
+
+    if not parts:
+        return 0
+
+    shared_dir = base / "attachments"
+    shared_dir.mkdir(parents=True, exist_ok=True)
+
+    saved = 0
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE emails
+            SET has_attachments = TRUE
+            WHERE id = %s
+            """,
+            (email_id,)
+        )
+
+    for part in parts:
+        filename = safe_filename(part.get("filename"))
+        mime_type = part.get("mime_type") or "application/octet-stream"
+        gmail_attachment_id = part.get("attachment_id")
+        data = part.get("data")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM email_attachments
+                WHERE email_id = %s
+                  AND gmail_attachment_id = %s
+                LIMIT 1
+                """,
+                (
+                    email_id,
+                    gmail_attachment_id
+                )
+            )
+
+            existing = cur.fetchone()
+
+        if existing:
+            continue
+
+        if gmail_attachment_id:
+            attachment_response = gmail_execute(
+                service.users().messages().attachments().get(
+                    userId="me",
+                    messageId=gmail_message_id,
+                    id=gmail_attachment_id
+                )
+            )
+
+            data = attachment_response.get("data")
+
+        file_data = decode_attachment_data(data)
+
+        if not file_data:
+            continue
+
+
+        digest = attachment_hash(file_data)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM email_attachments
+                WHERE email_id = %s
+                  AND content_hash = %s
+                LIMIT 1
+                """,
+                (
+                    email_id,
+                    digest
+                )
+            )
+
+            existing_email_attachment = cur.fetchone()
+
+        if existing_email_attachment:
+            continue
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    storage_path,
+                    content_text,
+                    content_status
+                FROM email_attachments
+                WHERE content_hash = %s
+                ORDER BY id
+                LIMIT 1
+                """,
+                (digest,)
+            )
+
+            existing_file = cur.fetchone()
+
+        if existing_file:
+            (
+                existing_attachment_id,
+                existing_storage_path,
+                content_text,
+                content_status
+            ) = existing_file
+
+            storage_path = Path(existing_storage_path)
+
+            print(
+                "Attachment reused:",
+                filename,
+                "| existing attachment:",
+                existing_attachment_id
+            )
+
+        else:
+            extension = Path(filename).suffix
+            safe_stem = Path(filename).stem
+
+            storage_name = (
+                f"{digest}_{safe_stem}{extension}"
+            )
+
+            storage_path = shared_dir / storage_name
+
+            if not storage_path.exists():
+                storage_path.write_bytes(file_data)
+
+            content_text = None
+            content_status = "pending"
+
+            try:
+                content_text, content_status = extract_attachment_text(
+                    storage_path,
+                    mime_type
+                )
+            except Exception as e:
+                content_status = "failed"
+
+                print(
+                    "Attachment extraction failed:",
+                    filename,
+                    "|",
+                    type(e).__name__,
+                    "-",
+                    e
+                )
+
+            existing_storage_path = str(
+                storage_path.relative_to(base)
+            )
+
+        if existing_file:
+            stored_path = existing_storage_path
+        else:
+            stored_path = str(
+                storage_path.relative_to(base)
+            )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO email_attachments (
+                    email_id,
+                    gmail_attachment_id,
+                    filename,
+                    mime_type,
+                    file_size,
+                    storage_path,
+                    content_hash,
+                    content_text,
+                    content_status
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                """,
+                (
+                    email_id,
+                    gmail_attachment_id,
+                    filename,
+                    mime_type,
+                    len(file_data),
+                    stored_path,
+                    digest,
+                    content_text,
+                    content_status
+                )
+            )
+
+        if existing_file:
+            print(
+                "Attachment linked:",
+                filename,
+                "| status:",
+                content_status
+            )
+        else:
+            print(
+                "Attachment saved:",
+                filename,
+                "| status:",
+                content_status,
+                "| text length:",
+                len(content_text or "")
+            )
+
+        saved += 1
+
+    return saved
+
+def backfill_missing_attachments(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                e.id,
+                e.message_id,
+                e.mailbox
+            FROM emails e
+            WHERE e.has_attachments = TRUE
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM email_attachments ea
+                  WHERE ea.email_id = e.id
+              )
+            ORDER BY e.received_at DESC NULLS LAST, e.id DESC
+            """
+        )
+
+        rows = cur.fetchall()
+
+    processed = 0
+
+    for email_id, message_id, mailbox in rows:
+        accounts = [
+            value.strip()
+            for value in str(mailbox or "").split(",")
+            if value.strip()
+        ]
+
+        for account in accounts:
+            try:
+                service = get_gmail_service(account)
+
+                count = save_gmail_attachments(
+                    service,
+                    message_id,
+                    email_id,
+                    conn
+                )
+
+                if count:
+                    processed += count
+                    break
+
+            except Exception:
+                continue
+
+    return processed
 
 
 def sync_emails():
@@ -404,7 +757,7 @@ def sync_emails():
 
             else:
                 sync_mode = "INCREMENTAL"
-                after_timestamp = int(last_sync.timestamp())
+                after_timestamp = int(last_sync.timestamp()) - 50
                 gmail_query = f"after:{after_timestamp}"
 
                 print("Sync mode: INCREMENTAL")
@@ -548,8 +901,26 @@ def sync_emails():
                         msg.get("From") or ""
                     )
 
-                    receiver = str(
-                        msg.get("To") or ""
+                    to_values = msg.get_all("To", [])
+                    cc_values = msg.get_all("Cc", [])
+                    bcc_values = msg.get_all("Bcc", [])
+
+                    receiver = ", ".join(
+                        address
+                        for _, address in getaddresses(to_values)
+                        if address
+                    )
+
+                    cc = ", ".join(
+                        address
+                        for _, address in getaddresses(cc_values)
+                        if address
+                    )
+
+                    bcc = ", ".join(
+                        address
+                        for _, address in getaddresses(bcc_values)
+                        if address
                     )
 
                     subject = str(
@@ -565,34 +936,121 @@ def sync_emails():
                     with conn.cursor() as cur:
                         cur.execute(
                             """
+                            SELECT
+                                id,
+                                message_id,
+                                mailbox
+                            FROM emails
+                            WHERE message_id = %s
+                            LIMIT 1
+                            """,
+                            (item["id"],)
+                        )
+
+                        message_row = cur.fetchone()
+
+                        if message_row:
+                            existing_id, existing_message_id, existing_mailbox = message_row
+
+                            existing_accounts = [
+                                x.strip()
+                                for x in str(existing_mailbox or "").split(",")
+                                if x.strip()
+                            ]
+
+                            if mailbox not in existing_accounts:
+                                existing_accounts.append(mailbox)
+
+                            cur.execute(
+                                """
+                                UPDATE emails
+                                SET
+                                    thread_id = %s,
+                                    sender = %s,
+                                    receiver = %s,
+                                    cc = %s,
+                                    bcc = %s,
+                                    subject = %s,
+                                    body_text = %s,
+                                    body_html = %s,
+                                    received_at = %s,
+                                    has_attachments = %s,
+                                    category = %s,
+                                    mailbox = %s,
+                                    email_hash = %s
+                                WHERE id = %s
+                                """,
+                                (
+                                    thread_id,
+                                    sender,
+                                    receiver,
+                                    cc,
+                                    bcc,
+                                    subject,
+                                    body_text,
+                                    body_html,
+                                    received_at,
+                                    has_attachments,
+                                    category,
+                                    ",".join(existing_accounts),
+                                    email_hash,
+                                    existing_id
+                                )
+                            )
+
+                            skipped_duplicates += 1
+                            total_skipped_duplicates += 1
+
+                            print(
+                                "Existing message updated:",
+                                item["id"],
+                                "| email id:",
+                                existing_id,
+                                "| mailboxes:",
+                                ",".join(existing_accounts)
+                            )
+
+                            if has_attachments:
+                                attachment_count = save_gmail_attachments(
+                                    service,
+                                    item["id"],
+                                    existing_id,
+                                    conn
+                                )
+
+                                if attachment_count:
+                                    print(
+                                        "Attachments saved:",
+                                        attachment_count,
+                                        "| email id:",
+                                        existing_id
+                                    )
+
+                            continue
+
+                        cur.execute(
+                            """
                             SELECT id, mailbox
                             FROM emails
                             WHERE email_hash = %s
-                            LIMIT 20
+                            LIMIT 1
                             """,
                             (email_hash,)
                         )
 
-                        duplicate_row = None
+                        hash_row = cur.fetchone()
 
-                        for candidate_id, candidate_mailbox in cur.fetchall():
-                            candidate_accounts = [
+                        if hash_row:
+                            existing_id, existing_mailbox = hash_row
+
+                            existing_accounts = [
                                 x.strip()
-                                for x in str(candidate_mailbox or "").split(",")
+                                for x in str(existing_mailbox or "").split(",")
                                 if x.strip()
                             ]
 
-                            if candidate_accounts and mailbox not in candidate_accounts:
-                                duplicate_row = (
-                                    candidate_id,
-                                    candidate_accounts
-                                )
-                                break
-
-                        if duplicate_row:
-                            existing_id, existing_accounts = duplicate_row
-
-                            existing_accounts.append(mailbox)
+                            if mailbox not in existing_accounts:
+                                existing_accounts.append(mailbox)
 
                             cur.execute(
                                 """
@@ -610,13 +1068,29 @@ def sync_emails():
                             total_skipped_duplicates += 1
 
                             print(
-                                "Cross-account duplicate detected:",
+                                "Logical duplicate detected:",
                                 item["id"],
                                 "| existing email id:",
                                 existing_id,
                                 "| mailboxes:",
                                 ",".join(existing_accounts)
                             )
+
+                            if has_attachments:
+                                attachment_count = save_gmail_attachments(
+                                    service,
+                                    item["id"],
+                                    existing_id,
+                                    conn
+                                )
+
+                                if attachment_count:
+                                    print(
+                                        "Attachments saved:",
+                                        attachment_count,
+                                        "| email id:",
+                                        existing_id
+                                    )
 
                             continue
 
@@ -634,26 +1108,16 @@ def sync_emails():
                                 has_attachments,
                                 category,
                                 mailbox,
-                                email_hash
+                                email_hash,
+                                cc,
+                                bcc
                             )
                             VALUES (
                                 %s, %s, %s, %s, %s,
                                 %s, %s, %s, %s, %s,
-                                %s, %s
+                                %s, %s, %s, %s
                             )
-                            ON CONFLICT (message_id)
-                            DO UPDATE SET
-                                thread_id = EXCLUDED.thread_id,
-                                sender = EXCLUDED.sender,
-                                receiver = EXCLUDED.receiver,
-                                subject = EXCLUDED.subject,
-                                body_text = EXCLUDED.body_text,
-                                body_html = EXCLUDED.body_html,
-                                received_at = EXCLUDED.received_at,
-                                has_attachments = EXCLUDED.has_attachments,
-                                category = EXCLUDED.category,
-                                mailbox = EXCLUDED.mailbox,
-                                email_hash = EXCLUDED.email_hash
+                            RETURNING id
                             """,
                             (
                                 item["id"],
@@ -667,9 +1131,29 @@ def sync_emails():
                                 has_attachments,
                                 category,
                                 mailbox,
-                                email_hash
+                                email_hash,
+                                cc,
+                                bcc
                             )
                         )
+
+                        email_id = cur.fetchone()[0]
+
+                        if has_attachments:
+                            attachment_count = save_gmail_attachments(
+                                service,
+                                item["id"],
+                                email_id,
+                                conn
+                            )
+
+                            if attachment_count:
+                                print(
+                                    "Attachments saved:",
+                                    attachment_count,
+                                    "| email id:",
+                                    email_id
+                                )
 
                     processed += 1
                     total_processed += 1
@@ -717,6 +1201,16 @@ def sync_emails():
                     cur,
                     mailbox,
                     sync_finished_at
+                )
+
+            conn.commit()
+
+            backfilled = backfill_missing_attachments(conn)
+
+            if backfilled:
+                print(
+                    "Attachments backfilled:",
+                    backfilled
                 )
 
             conn.commit()
