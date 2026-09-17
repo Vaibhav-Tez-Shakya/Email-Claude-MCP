@@ -13,3 +13,10 @@ Pillow
 pytesseract
 
 PyMuPDF
+
+pypdf
+python-docx
+openpyxl
+xlrd
+python-pptx
+striprtf
