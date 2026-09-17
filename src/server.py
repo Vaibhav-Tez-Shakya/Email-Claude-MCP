@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import io
 import os
@@ -9,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
+from mcp import types
 from mcp.server import MCPServer
 
 from src.main import sync_emails
@@ -307,6 +309,96 @@ def get_email_attachments(email_id: int, include_content: bool = True, max_chars
             }
             for row in rows
         ]
+
+    finally:
+        conn.close()
+
+
+@mcp.tool(structured_output=False)
+def get_email_attachment_image(
+    email_id: int,
+    attachment_id: int
+) -> types.CallToolResult:
+    """Return an image attachment as actual visual content for Claude to inspect.
+
+    Use this after get_email_attachments identifies an image attachment.
+    The returned MCP ImageContent contains the original image bytes.
+    """
+
+    conn = psycopg.connect(os.getenv("DATABASE_URL"))
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    filename,
+                    mime_type,
+                    file_size,
+                    content_bytes
+                FROM email_attachments
+                WHERE id = %s
+                  AND email_id = %s
+                """,
+                (attachment_id, email_id)
+            )
+
+            row = cur.fetchone()
+
+        if not row:
+            return types.CallToolResult(
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text="Attachment not found for the specified email."
+                    )
+                ],
+                isError=True
+            )
+
+        filename, mime_type, file_size, content_bytes = row
+
+        if not mime_type or not mime_type.lower().startswith("image/"):
+            return types.CallToolResult(
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=f"Attachment '{filename}' is not an image."
+                    )
+                ],
+                isError=True
+            )
+
+        if not content_bytes:
+            return types.CallToolResult(
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=f"Image '{filename}' has no stored image bytes."
+                    )
+                ],
+                isError=True
+            )
+
+        encoded = base64.b64encode(content_bytes).decode("ascii")
+
+        return types.CallToolResult(
+            content=[
+                types.TextContent(
+                    type="text",
+                    text=(
+                        f"Image attachment: {filename} "
+                        f"({mime_type}, {file_size} bytes). "
+                        "The following image content is the original attachment."
+                    )
+                ),
+                types.ImageContent(
+                    type="image",
+                    data=encoded,
+                    mime_type=mime_type
+                )
+            ]
+        )
 
     finally:
         conn.close()

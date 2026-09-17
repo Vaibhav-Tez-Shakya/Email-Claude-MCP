@@ -610,11 +610,12 @@ def save_gmail_attachments(service, gmail_message_id, email_id, conn):
                     storage_path,
                     content_hash,
                     content_text,
-                    content_status
+                    content_status,
+                    content_bytes
                 )
                 VALUES (
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
+                    %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -626,7 +627,8 @@ def save_gmail_attachments(service, gmail_message_id, email_id, conn):
                     stored_path,
                     digest,
                     content_text,
-                    content_status
+                    content_status,
+                    file_data if mime_type.lower().startswith("image/") else None
                 )
             )
 
