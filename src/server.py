@@ -11,7 +11,7 @@ from starlette.routing import Mount, Route
 
 from mcp.server import MCPServer
 
-from main import sync_emails
+from src.main import sync_emails
 
 
 base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -558,3 +558,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000"))
     )
+
