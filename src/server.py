@@ -1,4 +1,4 @@
-import base64
+﻿import base64
 import contextlib
 import io
 import os
@@ -14,6 +14,7 @@ from mcp import types
 from mcp.server import MCPServer
 
 from src.main import sync_emails
+from src.token_store import validate_token
 
 
 base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,7 +77,7 @@ def search_emails(query: str, limit: int = 10) -> list[dict]:
                 if value:
                     search_terms.append(value)
 
-        where_sql = ""
+        where_sql = "WHERE TRUE"
 
         if search_terms:
             for term in search_terms:
@@ -98,7 +99,7 @@ def search_emails(query: str, limit: int = 10) -> list[dict]:
                 )
 
         if filters:
-            where_sql = "WHERE " + " AND ".join(filters)
+            where_sql += " AND " + " AND ".join(filters)
 
         ranking_parts = []
         ranking_params = []
@@ -275,18 +276,18 @@ def get_email_attachments(email_id: int, include_content: bool = True, max_chars
             cur.execute(
                 """
                 SELECT
-                    id,
-                    gmail_attachment_id,
-                    filename,
-                    mime_type,
-                    file_size,
-                    content_status,
-                    content_text,
-                    created_at,
-                    content_hash
-                FROM email_attachments
-                WHERE email_id = %s
-                ORDER BY id
+                    ea.id,
+                    ea.gmail_attachment_id,
+                    ea.filename,
+                    ea.mime_type,
+                    ea.file_size,
+                    ea.content_status,
+                    ea.content_text,
+                    ea.created_at,
+                    ea.content_hash
+                FROM email_attachments ea
+                WHERE ea.email_id = %s
+                ORDER BY ea.id
                 """,
                 (email_id,)
             )
@@ -336,13 +337,13 @@ def get_email_attachment_image(
             cur.execute(
                 """
                 SELECT
-                    filename,
-                    mime_type,
-                    file_size,
-                    content_bytes
-                FROM email_attachments
-                WHERE id = %s
-                  AND email_id = %s
+                    ea.filename,
+                    ea.mime_type,
+                    ea.file_size,
+                    ea.content_bytes
+                FROM email_attachments ea
+                WHERE ea.id = %s
+                  AND ea.email_id = %s
                 """,
                 (attachment_id, email_id)
             )
@@ -631,9 +632,63 @@ async def lifespan(app):
         yield
 
 
+class MCPAuthMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        authorization = None
+
+        for key, value in scope.get("headers", []):
+            if key.lower() == b"authorization":
+                authorization = value.decode("latin-1")
+                break
+
+        if not authorization or not authorization.startswith("Bearer "):
+            response = JSONResponse(
+                {"error": "Unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+            await response(scope, receive, send)
+            return
+
+        token = authorization[7:].strip()
+
+        if not token:
+            response = JSONResponse(
+                {"error": "Unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+            await response(scope, receive, send)
+            return
+
+        user = validate_token(token)
+
+        if not user:
+            response = JSONResponse(
+                {"error": "Unauthorized"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+            await response(scope, receive, send)
+            return
+
+        scope["mcp_user"] = user
+        await self.app(scope, receive, send)
+
+
+
 mcp_app = mcp.streamable_http_app(
     host="0.0.0.0"
 )
+
+mcp_app = MCPAuthMiddleware(mcp_app)
 
 
 app = Starlette(
