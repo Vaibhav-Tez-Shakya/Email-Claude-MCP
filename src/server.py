@@ -15,6 +15,7 @@ from mcp.server import MCPServer
 
 from src.main import sync_emails
 from src.token_store import validate_token
+from src.admin import admin_home, admin_create_user, admin_create_token, admin_revoke_token
 
 
 base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -695,6 +696,10 @@ app = Starlette(
     routes=[
         Route("/sync", sync_endpoint, methods=["POST"]),
         Route("/health", health_endpoint, methods=["GET"]),
+        Route("/admin", admin_home, methods=["GET"]),
+        Route("/admin/create-user", admin_create_user, methods=["POST"]),
+        Route("/admin/create-token", admin_create_token, methods=["POST"]),
+        Route("/admin/revoke-token", admin_revoke_token, methods=["POST"]),
         Mount("/", app=mcp_app),
     ],
     lifespan=lifespan,

@@ -130,6 +130,97 @@ def delete_user(user_id):
         conn.close()
 
 
+
+def get_users():
+    conn = psycopg.connect(get_database_url())
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    u.id,
+                    u.name,
+                    u.active,
+                    u.created_at,
+                    COUNT(t.id) AS token_count
+                FROM mcp_users u
+                LEFT JOIN mcp_tokens t
+                    ON t.user_id = u.id
+                GROUP BY u.id, u.name, u.active, u.created_at
+                ORDER BY u.id
+                """
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_tokens():
+    conn = psycopg.connect(get_database_url())
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    t.id,
+                    t.user_id,
+                    u.name,
+                    t.created_at,
+                    t.expires_at,
+                    t.revoked_at,
+                    t.last_used_at
+                FROM mcp_tokens t
+                JOIN mcp_users u
+                    ON u.id = t.user_id
+                ORDER BY t.id DESC
+                """
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def get_user(user_id):
+    conn = psycopg.connect(get_database_url())
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, active, created_at
+                FROM mcp_users
+                WHERE id = %s
+                """,
+                (user_id,),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def set_user_active(user_id, active):
+    conn = psycopg.connect(get_database_url())
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mcp_users
+                SET active = %s
+                WHERE id = %s
+                RETURNING id, name, active
+                """,
+                (active, user_id),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+        return row
+    finally:
+        conn.close()
+
 def main():
     parser = argparse.ArgumentParser(
         description="MCP token administration"
