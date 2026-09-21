@@ -1,10 +1,12 @@
-﻿import base64
+import base64
 import os
 import secrets
 from datetime import datetime, timezone
 
 from starlette.responses import HTMLResponse, RedirectResponse
 from starlette.requests import Request
+
+_pending_tokens = {}
 
 from src.token_admin import (
     create_user,
@@ -72,6 +74,11 @@ def status_for_token(expires_at, revoked_at):
 
 
 def admin_page(request, one_time_token=None, message=None):
+    if one_time_token is None:
+        token_key = request.query_params.get("token_notice")
+        if token_key:
+            one_time_token = _pending_tokens.pop(token_key, None)
+
     if not admin_credentials_valid(request):
         return unauthorized()
 
@@ -327,9 +334,12 @@ async def admin_create_token(request):
 
     result = create_token(user_id)
 
-    return admin_page(
-        request,
-        one_time_token=result["token"],
+    token_key = secrets.token_urlsafe(16)
+    _pending_tokens[token_key] = result["token"]
+
+    return RedirectResponse(
+        f"/admin?token_notice={token_key}",
+        status_code=303,
     )
 
 
