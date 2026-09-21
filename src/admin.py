@@ -18,6 +18,17 @@ from src.token_admin import (
 def admin_credentials_valid(request):
     authorization = request.headers.get("Authorization", "")
 
+    expected_username = os.getenv("ADMIN_USERNAME")
+    expected_password = os.getenv("ADMIN_PASSWORD")
+
+    print(
+        f"ADMIN_AUTH_DEBUG username_present={bool(expected_username)} "
+        f"password_present={bool(expected_password)} "
+        f"password_length={len(expected_password or "")} "
+        f"authorization_present={bool(authorization)} "
+        f"basic_auth={authorization.startswith("Basic ")}"
+    )
+
     if not authorization.startswith("Basic "):
         return False
 
@@ -30,14 +41,6 @@ def admin_credentials_valid(request):
     except Exception:
         return False
 
-    expected_username = os.getenv("ADMIN_USERNAME")
-    expected_password = os.getenv("ADMIN_PASSWORD")
-
-    print(
-        f"ADMIN_AUTH_DEBUG username_present={bool(expected_username)} "
-        f"password_present={bool(expected_password)} "
-        f"password_length={len(expected_password or "")}"
-    )
 
     if not expected_username or not expected_password:
         return False
@@ -347,5 +350,6 @@ async def admin_revoke_token(request):
         "/admin",
         status_code=303,
     )
+
 
 
