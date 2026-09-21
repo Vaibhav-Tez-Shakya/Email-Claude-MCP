@@ -125,7 +125,7 @@ def admin_page(request, one_time_token=None, message=None):
             action = f"""
             <form method="post" action="/admin/revoke-token">
                 <input type="hidden" name="token_id" value="{token_id}">
-                <button type="submit">Revoke</button>
+                <button class="button-danger" type="submit">Revoke</button>
             </form>
             """
 
@@ -161,141 +161,680 @@ def admin_page(request, one_time_token=None, message=None):
 
     html = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
         <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Email Claude MCP Admin</title>
+
         <style>
+            :root {{
+                --bg: #070505;
+                --panel: #100c0c;
+                --panel-soft: #151010;
+                --border: #2a1d1d;
+                --text: #f2ece9;
+                --muted: #9b8f8b;
+                --accent: #d34a24;
+                --accent-dark: #a20903;
+                --success: #57b987;
+                --danger: #e05b5b;
+                --shadow: 0 18px 45px rgba(0, 0, 0, 0.25);
+            }}
+
+            * {{
+                box-sizing: border-box;
+            }}
+
+            html {{
+                scroll-behavior: smooth;
+            }}
+
             body {{
-                font-family: Arial, sans-serif;
-                margin: 40px;
-                background: #f5f5f5;
-                color: #222;
+                margin: 0;
+                min-height: 100vh;
+                background: var(--bg);
+                color: var(--text);
+                font-family:
+                    Inter, ui-sans-serif, system-ui, -apple-system,
+                    BlinkMacSystemFont, "Segoe UI", sans-serif;
             }}
 
-            h1 {{
-                margin-bottom: 30px;
-            }}
-
-            section {{
-                background: white;
-                padding: 20px;
-                margin-bottom: 25px;
-                border-radius: 8px;
-            }}
-
-            table {{
-                border-collapse: collapse;
-                width: 100%;
-                margin-top: 15px;
-            }}
-
-            th, td {{
-                border: 1px solid #ddd;
-                padding: 10px;
-                text-align: left;
-            }}
-
-            th {{
-                background: #eee;
-            }}
-
+            button,
             input {{
-                padding: 8px;
-                margin-right: 8px;
+                font: inherit;
             }}
 
             button {{
-                padding: 8px 12px;
                 cursor: pointer;
             }}
 
-            .token-box {{
-                background: #fff3cd;
-                border: 1px solid #ffe69c;
-                padding: 15px;
-                margin-bottom: 25px;
+            .app {{
+                min-height: 100vh;
+                display: flex;
             }}
 
-            .message {{
-                background: #d1e7dd;
+            .sidebar {{
+                width: 240px;
+                min-height: 100vh;
+                position: fixed;
+                left: 0;
+                top: 0;
+                bottom: 0;
+                padding: 28px 18px;
+                background: #090606;
+                border-right: 1px solid var(--border);
+                display: flex;
+                flex-direction: column;
+                z-index: 10;
+            }}
+
+            .brand {{
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                padding: 0 10px;
+                margin-bottom: 38px;
+            }}
+
+            .brand-mark {{
+                width: 34px;
+                height: 34px;
+                border-radius: 10px;
+                display: grid;
+                place-items: center;
+                background: linear-gradient(
+                    145deg,
+                    var(--accent),
+                    var(--accent-dark)
+                );
+                color: white;
+                font-size: 15px;
+                font-weight: 800;
+            }}
+
+            .brand-text {{
+                font-size: 14px;
+                font-weight: 700;
+                letter-spacing: -0.2px;
+            }}
+
+            .brand-subtitle {{
+                margin-top: 3px;
+                color: var(--muted);
+                font-size: 10px;
+            }}
+
+            .nav-label {{
+                padding: 0 11px;
+                margin-bottom: 10px;
+                color: #665b58;
+                font-size: 10px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 1.3px;
+            }}
+
+            .nav {{
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+            }}
+
+            .nav-item {{
+                display: flex;
+                align-items: center;
+                gap: 11px;
+                padding: 11px 12px;
+                border-radius: 9px;
+                color: var(--muted);
+                text-decoration: none;
+                font-size: 13px;
+                transition: 0.18s ease;
+            }}
+
+            .nav-item:hover {{
+                background: var(--panel-soft);
+                color: var(--text);
+            }}
+
+            .nav-item.active {{
+                background: rgba(162, 9, 3, 0.16);
+                color: #f0d8d3;
+                border: 1px solid rgba(162, 9, 3, 0.28);
+            }}
+
+            .nav-item.active .nav-icon {{
+                border-color: rgba(211, 74, 36, 0.45);
+                background: rgba(211, 74, 36, 0.12);
+                color: #f0b19d;
+            }}
+
+            .nav-icon {{
+                width: 22px;
+                height: 22px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 22px;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                background: rgba(255, 255, 255, 0.025);
+                color: #b9aaa5;
+                font-size: 10px;
+                font-weight: 800;
+                letter-spacing: 0.2px;
+            }}
+
+            .sidebar-bottom {{
+                margin-top: auto;
                 padding: 12px;
-                margin-bottom: 20px;
+                border: 1px solid var(--border);
+                border-radius: 11px;
+                background: var(--panel);
+            }}
+
+            .sidebar-bottom-title {{
+                font-size: 11px;
+                font-weight: 700;
+                margin-bottom: 5px;
+            }}
+
+            .sidebar-bottom-text {{
+                color: var(--muted);
+                font-size: 10px;
+                line-height: 1.5;
+            }}
+
+            .main {{
+                width: calc(100% - 240px);
+                margin-left: 240px;
+                padding: 28px 34px 50px;
+            }}
+
+            .topbar {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 20px;
+                margin-bottom: 32px;
+            }}
+
+            .page-title {{
+                margin: 0;
+                font-size: 26px;
+                font-weight: 700;
+                letter-spacing: -0.8px;
+            }}
+
+            .page-subtitle {{
+                margin: 7px 0 0;
+                color: var(--muted);
+                font-size: 12px;
+            }}
+
+            .admin-badge {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 9px 12px;
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                background: var(--panel);
+                color: var(--muted);
+                font-size: 11px;
+            }}
+
+            .status-dot {{
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                background: var(--success);
+                box-shadow: 0 0 9px rgba(87, 185, 135, 0.55);
+            }}
+
+            .dashboard-grid {{
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 14px;
+                margin-bottom: 22px;
+            }}
+
+            .stat-card {{
+                min-height: 112px;
+                padding: 18px;
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                box-shadow: var(--shadow);
+            }}
+
+            .stat-label {{
+                color: var(--muted);
+                font-size: 11px;
+                font-weight: 600;
+            }}
+
+            .stat-value {{
+                margin-top: 12px;
+                font-size: 27px;
+                font-weight: 750;
+                letter-spacing: -1px;
+            }}
+
+            .stat-note {{
+                margin-top: 5px;
+                color: #706561;
+                font-size: 10px;
+            }}
+
+            .content-card {{
+                margin-bottom: 18px;
+                padding: 21px;
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                box-shadow: var(--shadow);
+            }}
+
+            .section-header {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 15px;
+                margin-bottom: 16px;
+            }}
+
+            .section-title {{
+                margin: 0;
+                font-size: 15px;
+                font-weight: 700;
+            }}
+
+            .section-description {{
+                margin: 4px 0 0;
+                color: var(--muted);
+                font-size: 11px;
+            }}
+
+            .create-user-form {{
+                display: flex;
+                gap: 9px;
+                flex-wrap: wrap;
+            }}
+
+            input {{
+                min-width: 220px;
+                padding: 10px 12px;
+                border: 1px solid var(--border);
+                border-radius: 9px;
+                outline: none;
+                background: #0b0808;
+                color: var(--text);
+            }}
+
+            input::placeholder {{
+                color: #665c59;
+            }}
+
+            input:focus {{
+                border-color: rgba(211, 74, 36, 0.65);
+                box-shadow: 0 0 0 3px rgba(211, 74, 36, 0.08);
+            }}
+
+            button {{
+                border: 0;
+                border-radius: 8px;
+                padding: 9px 13px;
+                background: var(--accent-dark);
+                color: white;
+                font-size: 11px;
+                font-weight: 700;
+                transition: 0.18s ease;
+            }}
+
+            button:hover {{
+                background: var(--accent);
+                transform: translateY(-1px);
+            }}
+
+            .button-danger {{
+                background: rgba(176, 35, 35, 0.18);
+                border: 1px solid rgba(224, 91, 91, 0.32);
+                color: #f0aaa8;
+            }}
+
+            .button-danger:hover {{
+                background: rgba(224, 91, 91, 0.22);
+                border-color: rgba(224, 91, 91, 0.48);
+                color: #ffd0ce;
+            }}
+
+            .table-wrap {{
+                overflow-x: auto;
+                border: 1px solid var(--border);
+                border-radius: 10px;
+            }}
+
+            table {{
+                width: 100%;
+                min-width: 760px;
+                border-collapse: collapse;
+            }}
+
+            th,
+            td {{
+                padding: 12px 13px;
+                border-bottom: 1px solid var(--border);
+                text-align: left;
+                white-space: nowrap;
+                font-size: 11px;
+            }}
+
+            th {{
+                background: #0c0909;
+                color: #817572;
+                font-size: 9px;
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+            }}
+
+            td {{
+                color: #d7ceca;
+            }}
+
+            .cell-secondary {{
+                color: var(--muted);
+                font-family: Consolas, monospace;
+                font-size: 10px;
+            }}
+
+            tr:last-child td {{
+                border-bottom: 0;
+            }}
+
+            tr:hover td {{
+                background: rgba(255, 255, 255, 0.015);
+            }}
+
+            td form {{
+                margin: 0;
+            }}
+
+            .token-box {{
+                margin-bottom: 18px;
+                padding: 17px;
+                background: rgba(211, 74, 36, 0.08);
+                border: 1px solid rgba(211, 74, 36, 0.3);
+                border-radius: 12px;
+            }}
+
+            .token-box strong {{
+                display: block;
+                margin-bottom: 9px;
+                color: #f1d9d3;
+                font-size: 12px;
             }}
 
             .token-box input {{
-                width: 500px;
-                max-width: 80%;
+                width: min(650px, 75%);
+                margin-right: 7px;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+            }}
+
+            .token-box p {{
+                margin: 9px 0 0;
+                color: var(--muted);
+                font-size: 10px;
+            }}
+
+            .message {{
+                margin-bottom: 18px;
+                padding: 12px 14px;
+                background: rgba(87, 185, 135, 0.08);
+                border: 1px solid rgba(87, 185, 135, 0.2);
+                border-radius: 10px;
+                color: #a9d9c0;
+                font-size: 11px;
+            }}
+
+            @media (max-width: 1050px) {{
+                .dashboard-grid {{
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                }}
+            }}
+
+            @media (max-width: 760px) {{
+                .sidebar {{
+                    position: relative;
+                    width: 100%;
+                    min-height: auto;
+                    border-right: 0;
+                    border-bottom: 1px solid var(--border);
+                }}
+
+                .app {{
+                    display: block;
+                }}
+
+                .nav {{
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                }}
+
+                .sidebar-bottom {{
+                    display: none;
+                }}
+
+                .main {{
+                    width: 100%;
+                    margin-left: 0;
+                    padding: 22px 16px 40px;
+                }}
+
+                .topbar {{
+                    align-items: flex-start;
+                    flex-direction: column;
+                }}
+
+                .dashboard-grid {{
+                    grid-template-columns: 1fr;
+                }}
+
+                .content-card {{
+                    padding: 15px;
+                }}
+
+                .token-box input {{
+                    width: 100%;
+                    margin: 0 0 9px;
+                }}
             }}
         </style>
     </head>
 
     <body>
-        <h1>Email Claude MCP Admin</h1>
+        <div class="app">
 
-        {message_box}
-        {token_box}
+            <aside class="sidebar">
+                <div class="brand">
+                    <div class="brand-mark">E</div>
+                    <div>
+                        <div class="brand-text">Email Claude MCP</div>
+                        <div class="brand-subtitle">Admin Console</div>
+                    </div>
+                </div>
 
-        <section>
-            <h2>Create User</h2>
+                <div class="nav-label">Workspace</div>
 
-            <form method="post" action="/admin/create-user">
-                <input
-                    type="text"
-                    name="name"
-                    placeholder="User name"
-                    required
-                >
-                <button type="submit">Create User</button>
-            </form>
-        </section>
+                <nav class="nav">
+                    <a class="nav-item active" href="/admin">
+                        <span class="nav-icon">D</span>
+                        <span>Dashboard</span>
+                    </a>
 
-        <section>
-            <h2>Users</h2>
+                    <a class="nav-item" href="#users">
+                        <span class="nav-icon">U</span>
+                        <span>Users</span>
+                    </a>
 
-            <table>
-                <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th>Tokens</th>
-                    <th>Action</th>
-                </tr>
+                    <a class="nav-item" href="#tokens">
+                        <span class="nav-icon">T</span>
+                        <span>Tokens</span>
+                    </a>
 
-                {user_rows}
-            </table>
-        </section>
+                    <a class="nav-item" href="#create-user">
+                        <span class="nav-icon">+</span>
+                        <span>Create User</span>
+                    </a>
+                </nav>
 
-        <section>
-            <h2>Tokens</h2>
+                <div class="sidebar-bottom">
+                    <div class="sidebar-bottom-title">MCP Status</div>
+                    <div class="sidebar-bottom-text">
+                        Admin console is connected to the Email Claude MCP backend.
+                    </div>
+                </div>
+            </aside>
 
-            <table>
-                <tr>
-                    <th>Token ID</th>
-                    <th>User ID</th>
-                    <th>User</th>
-                    <th>Status</th>
-                    <th>Created</th>
-                    <th>Expires</th>
-                    <th>Last Used</th>
-                    <th>Action</th>
-                </tr>
+            <main class="main">
 
-                {token_rows}
-            </table>
-        </section>
+                <header class="topbar">
+                    <div>
+                        <h1 class="page-title">Dashboard</h1>
+                        <p class="page-subtitle">
+                            Manage MCP users, access tokens and administration.
+                        </p>
+                    </div>
+
+                    <div class="admin-badge">
+                        <span class="status-dot"></span>
+                        Admin session active
+                    </div>
+                </header>
+
+                {message_box}
+                {token_box}
+
+                <section class="dashboard-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total Users</div>
+                        <div class="stat-value">{len(users)}</div>
+                        <div class="stat-note">Registered MCP users</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-label">Total Tokens</div>
+                        <div class="stat-value">{len(tokens)}</div>
+                        <div class="stat-note">Issued access tokens</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-label">Active Tokens</div>
+                        <div class="stat-value">{sum(1 for t in tokens if status_for_token(t[4], t[5]) == "ACTIVE")}</div>
+                        <div class="stat-note">Currently usable</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-label">Revoked Tokens</div>
+                        <div class="stat-value">{sum(1 for t in tokens if t[5] is not None)}</div>
+                        <div class="stat-note">Access removed</div>
+                    </div>
+                </section>
+
+                <section class="content-card" id="create-user">
+                    <div class="section-header">
+                        <div>
+                            <h2 class="section-title">Create User</h2>
+                            <p class="section-description">
+                                Add a user before generating an MCP access token.
+                            </p>
+                        </div>
+                    </div>
+
+                    <form class="create-user-form" method="post" action="/admin/create-user">
+                        <input
+                            type="text"
+                            name="name"
+                            placeholder="User name"
+                            required
+                        >
+                        <button type="submit">Create User</button>
+                    </form>
+                </section>
+
+                <section class="content-card" id="users">
+                    <div class="section-header">
+                        <div>
+                            <h2 class="section-title">Users</h2>
+                            <p class="section-description">
+                                Manage users and generate their MCP credentials.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Tokens</th>
+                                <th>Action</th>
+                            </tr>
+
+                            {user_rows}
+                        </table>
+                    </div>
+                </section>
+
+                <section class="content-card" id="tokens">
+                    <div class="section-header">
+                        <div>
+                            <h2 class="section-title">Tokens</h2>
+                            <p class="section-description">
+                                Review token status and revoke access when required.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table>
+                            <tr>
+                                <th>Token ID</th>
+                                <th>User ID</th>
+                                <th>User</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Expires</th>
+                                <th>Last Used</th>
+                                <th>Action</th>
+                            </tr>
+
+                            {token_rows}
+                        </table>
+                    </div>
+                </section>
+
+            </main>
+        </div>
 
         <script>
             function copyToken() {{
                 const input = document.getElementById("newToken");
+
+                if (!input) {{
+                    return;
+                }}
+
                 navigator.clipboard.writeText(input.value);
             }}
         </script>
     </body>
     </html>
     """
-
     return HTMLResponse(html)
 
 
@@ -360,6 +899,7 @@ async def admin_revoke_token(request):
         "/admin",
         status_code=303,
     )
+
 
 
 
