@@ -74,13 +74,13 @@ def status_for_token(expires_at, revoked_at):
 
 
 def admin_page(request, one_time_token=None, message=None):
+    if not admin_credentials_valid(request):
+        return unauthorized()
+
     if one_time_token is None:
         token_key = request.query_params.get("token_notice")
         if token_key:
             one_time_token = _pending_tokens.pop(token_key, None)
-
-    if not admin_credentials_valid(request):
-        return unauthorized()
 
     users = get_users()
     tokens = get_tokens()
@@ -147,7 +147,7 @@ def admin_page(request, one_time_token=None, message=None):
     if one_time_token:
         token_box = f"""
         <div class="token-box">
-            <strong>New token — copy it now:</strong>
+            <strong>New token - copy it now:</strong>
             <input id="newToken" value="Bearer {one_time_token}" readonly>
             <button onclick="copyToken()">Copy Bearer Token</button>
             <p>This token is shown only once.</p>
